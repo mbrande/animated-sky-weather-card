@@ -282,6 +282,49 @@ const wxTempColor = (t, unit) => {
     : f >= 60 ? "#4693D1" : "#2A6FB8";
 };
 
+/* Locale for every date/time: an explicit config wins, then Home
+ * Assistant's language, then the browser's. */
+const wxLocale = (hass, cfg) =>
+  (cfg && cfg.locale) ||
+  (hass && hass.locale && hass.locale.language) ||
+  (hass && hass.language) ||
+  (typeof navigator !== "undefined" && navigator.language) || "en";
+
+/* undefined = let the locale decide (Intl's own default). */
+const wxHour12 = (hass, cfg) => {
+  const t = cfg && cfg.time_format;
+  if (t === "12" || t === 12) return true;
+  if (t === "24" || t === 24) return false;
+  const hl = hass && hass.locale;
+  if (hl && hl.time_format === "12") return true;
+  if (hl && hl.time_format === "24") return false;
+  return undefined;
+};
+
+/* Hour label for the strip: "4PM" / "16" / whatever the locale writes. */
+const wxHourLabel = (d, locale, h12) => {
+  const o = { hour: "numeric" };
+  if (h12 !== undefined) o.hour12 = h12;
+  return d.toLocaleTimeString(locale, o).replace(/\s+/g, "");
+};
+
+const wxTimeLabel = (d, locale, h12) => {
+  const o = { hour: "numeric", minute: "2-digit" };
+  if (h12 !== undefined) o.hour12 = h12;
+  return d.toLocaleTimeString(locale, o).replace(/\s+/g, "");
+};
+
+/* Home Assistant ships translations for these; fall back to English. */
+const wxT = (hass, keys, fallback) => {
+  if (hass && typeof hass.localize === "function") {
+    for (const k of keys) {
+      const v = hass.localize(k);
+      if (v) return v;
+    }
+  }
+  return fallback;
+};
+
 const WX_LABEL = { sunny: "Sunny", clear: "Clear", "clear-night": "Clear",
   partlycloudy: "Partly Cloudy", cloudy: "Cloudy", rainy: "Rain", pouring: "Heavy Rain",
   lightning: "Thunderstorms", "lightning-rainy": "Thunderstorms", snowy: "Snow",
@@ -329,7 +372,7 @@ class AnimatedSkyWeatherCard extends HTMLElement {
   setConfig(config) {
     if (!config || !config.entity) throw new Error("animated-sky-weather-card: 'entity' is required");
     this._config = Object.assign(
-      { forecast_rows: 4, time_format: "12", animation: true }, config);
+      { forecast_rows: 4, animation: true }, config);
     this._built = false;
   }
 
@@ -1004,13 +1047,23 @@ class AnimatedSkyWeatherCard extends HTMLElement {
   _renderClock() {
     if (!this._els) return;
     const now = new Date();
-    const h12 = String(this._config.time_format) !== "24";
-    let txt = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: h12 });
-    if (h12) {
-      const parts = txt.split(" ");
-      this._els.clock.innerHTML = parts[0] + `<span class="ampm">${parts[1] || ""}</span>`;
-    } else this._els.clock.textContent = txt;
-    this._els.datel.textContent = now.toLocaleDateString("en-US",
+    const locale = wxLocale(this._hass, this._config);
+    const h12 = wxHour12(this._hass, this._config);
+    const opts = { hour: "numeric", minute: "2-digit" };
+    if (h12 !== undefined) opts.hour12 = h12;
+    // split via Intl parts: some locales omit the day period, some lead with
+    // it, and not all separate it with a space
+    let head = "", suffix = "";
+    try {
+      for (const p of new Intl.DateTimeFormat(locale, opts).formatToParts(now)) {
+        if (p.type === "dayPeriod") suffix += p.value;
+        else if (!(p.type === "literal" && !head)) head += p.value;
+      }
+      head = head.trim();
+    } catch (e) { head = now.toLocaleTimeString(locale, opts); suffix = ""; }
+    this._els.clock.innerHTML = suffix
+      ? head + `<span class="ampm">${suffix}</span>` : head;
+    this._els.datel.textContent = now.toLocaleDateString(locale,
       { weekday: "long", month: "long", day: "numeric" });
     const loc = this._hass && this._hass.config ? this._hass.config.location_name : "";
     this._els.city.textContent = this._config.city || (loc && loc !== "Home" ? loc : "");
@@ -1144,7 +1197,16 @@ class AnimatedSkyWeatherCard extends HTMLElement {
       // providers report 'sunny' around the clock; after dark that reads 'Clear'
       const oc = this._curCond;
       const condLabel = night && (oc === "sunny" || oc === "clear") ? "clear-night" : oc;
-      this._els.bigcond.textContent = wxLabel(condLabel);
+      // Home Assistant already translates weather states; use its string when
+      // the condition really is that entity's state (not a demo override)
+      let text = "";
+      const ce = this._config.current_entity;
+      const st = (ce && this._hass.states[ce]) || s;
+      if (!this._config.demo && st && st.state === condLabel &&
+          typeof this._hass.formatEntityState === "function") {
+        try { text = this._hass.formatEntityState(st); } catch (e) { text = ""; }
+      }
+      this._els.bigcond.textContent = text || wxLabel(condLabel);
     }
     this._renderForecast();
     this._renderHourly();
@@ -1184,8 +1246,12 @@ class AnimatedSkyWeatherCard extends HTMLElement {
     const sun = this._sun;
     const events = [];
     if (sun) {
-      for (const [attr, kind, icon] of [["next_setting", "Sunset", "sunset"],
-                                        ["next_rising", "Sunrise", "sunrise"]]) {
+      const sunsetWord = wxT(this._hass,
+        ["ui.card.sun.setting", "ui.panel.lovelace.editor.card.sun.sunset"], "Sunset");
+      const sunriseWord = wxT(this._hass,
+        ["ui.card.sun.rising", "ui.panel.lovelace.editor.card.sun.sunrise"], "Sunrise");
+      for (const [attr, kind, icon] of [["next_setting", sunsetWord, "sunset"],
+                                        ["next_rising", sunriseWord, "sunrise"]]) {
         const t = new Date(sun.attributes[attr] || 0).getTime();
         if (t > now) events.push({ t, kind, icon });
       }
@@ -1222,23 +1288,25 @@ class AnimatedSkyWeatherCard extends HTMLElement {
         ei++;
       }
     }
+    const locale = wxLocale(this._hass, this._config);
+    const h12 = wxHour12(this._hass, this._config);
+    const nowWord = wxT(this._hass, ["ui.card.weather.forecast_now", "ui.common.now"], "Now");
     this._els.hslots.innerHTML = slots.slice(0, 7).map((sl) => {
       if (sl.ev) {
         const d = new Date(sl.ev.t);
-        const lbl = d.toLocaleTimeString("en-US",
-          { hour: "numeric", minute: "2-digit", hour12: true }).replace(" ", "");
+        const lbl = wxTimeLabel(d, locale, h12);
         return `<div class="h"><div class="hl">${lbl}</div>` +
           `<svg viewBox="0 0 24 24">${WX_ICONS[sl.ev.icon]}</svg>` +
           `<div class="ht evt">${sl.ev.kind}</div></div>`;
       }
       if (sl.nowcast) {
         const nightNow = wxIsNightAt(now, riseT, setT);
-        return `<div class="h"><div class="hl">Now</div>` +
+        return `<div class="h"><div class="hl">${nowWord}</div>` +
           `<svg viewBox="0 0 24 24">${WX_ICONS[wxIconFor(sl.nowcast.condition, nightNow)]}</svg>` +
           `<div class="ht">${Math.round(sl.nowcast.temperature)}°</div></div>`;
       }
       const d = new Date(sl.hour.datetime);
-      const lbl = d.toLocaleTimeString("en-US", { hour: "numeric", hour12: true }).replace(" ", "");
+      const lbl = wxHourLabel(d, locale, h12);
       const nightAt = wxIsNightAt(d.getTime(), riseT, setT);
       return `<div class="h"><div class="hl">${lbl}</div>` +
         `<svg viewBox="0 0 24 24">${WX_ICONS[wxIconFor(sl.hour.condition, nightAt)]}</svg>` +
@@ -1258,7 +1326,8 @@ class AnimatedSkyWeatherCard extends HTMLElement {
     }
     const n = wxClamp(Number(this._config.forecast_rows) || 4, 1, 6);
     const rows = this._forecast.slice(0, n).map((d) => ({
-      day: new Date(d.datetime).toLocaleDateString("en-US", { weekday: "short" }),
+      day: new Date(d.datetime).toLocaleDateString(
+        wxLocale(this._hass, this._config), { weekday: "short" }),
       cond: d.condition, hi: Math.round(d.temperature), lo: Math.round(d.templow),
     }));
     const bars = wxBars(rows);

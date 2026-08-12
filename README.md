@@ -24,6 +24,7 @@ embedded in the card.
 | **Volumetric clouds** | Clusters of self-shaded puff sprites in a CSS 3D world, spinning and drifting with depth parallax. Cover drives their size, count and opacity; period-locked drift trains mean an overcast sky never opens a hole. |
 | **Weather scenes** | 15 conditions, each with its own look — see the table below. |
 | **Panel interaction** | Rain, hail and snow hit the hourly panel: splashes ricochet, hailstones bounce, snow accumulates and melts. Every impact comes from a drop you can watch fall. |
+| **Localised** | Dates, times and condition text follow your Home Assistant language and 12/24-hour setting; °C and °F both supported; northern and southern hemisphere skies. |
 | **Apple-style layout** | Clock and date, hero temperature and condition, hourly strip with sunrise/sunset inserted at their true times, and daily rows with shared temperature-range bars. |
 
 ## The sky in every condition
@@ -111,7 +112,8 @@ time_format: "12"
 | `coverage_entity` | string | — | Optional sensor reporting cloud cover in **percent**. Drives cloud density directly; without it the condition sets the density. |
 | `city` | string | — | Name shown above the temperature. Omit to show none. |
 | `forecast_rows` | number | `4` | Daily rows (1–6). **`0` = compact mode**: no daily panel. |
-| `time_format` | string | `"12"` | `"12"` or `"24"` |
+| `time_format` | string | follows Home Assistant | `"12"` or `"24"` to force a clock; omit it and the card uses your Home Assistant time-format setting (which can itself follow your language or system). |
+| `locale` | string | follows Home Assistant | BCP-47 tag (e.g. `"de-DE"`) to force date/time formatting. Omit it and the card follows your Home Assistant language, then the browser. |
 | `height` | number | `440` (compact: `355`) | Card height in pixels |
 | `animation` | boolean | `true` | `false` freezes all motion |
 
@@ -139,7 +141,10 @@ sky it draws) from real observations while keeping your model's temperatures and
   left to right; south of it the sun crosses the north, so the card mirrors the arc — sunrise on
   the right, sunset on the left, exactly as you would see it facing that path. The moon follows
   the same mapping.
-- Dates and times are currently formatted for **en-US**; broader locale support is planned.
+- **Any language.** Dates, weekday names, clock and hourly labels are formatted with the Intl
+  APIs in your Home Assistant language (12/24-hour follows your HA setting), and the condition
+  text uses Home Assistant's own translated weather states. "Now", "Sunrise" and "Sunset"
+  use HA translations where available and fall back to English.
 - Textures (clouds, sprites) are procedurally generated — no third-party imagery.
 
 ## License
