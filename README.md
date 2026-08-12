@@ -9,7 +9,9 @@ panel, hailstones bounce, snow settles on the edges, lightning branches across a
 No CDN, no telemetry, no API keys, **zero network requests** — every texture is generated and
 embedded in the card.
 
-![The card on a partly cloudy afternoon](docs/card-full.png)
+<p align="center">
+  <img src="docs/card-full.png" width="420" alt="The card on a partly cloudy afternoon">
+</p>
 
 ---
 
@@ -59,7 +61,9 @@ Night versions of every scene are automatic, driven by the real sun elevation.
 
 Set `forecast_rows: 0` for a shorter card — sky, hero and hourly only:
 
-![Compact mode](docs/card-compact.png)
+<p align="center">
+  <img src="docs/card-compact.png" width="560" alt="Compact mode">
+</p>
 
 ---
 
