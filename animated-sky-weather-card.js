@@ -19,10 +19,21 @@
  *   a daily forecast with shared temperature range bars.
  * Zero network requests: no CDN, no telemetry, no API keys. Every texture is
  * generated and embedded.
+ *
+ * Config:
+ *   entity           (required) weather entity for temperature and forecasts
+ *   current_entity   optional entity used ONLY for the observed condition
+ *   coverage_entity  optional sensor reporting cloud cover in percent
+ *   city             name shown above the temperature
+ *   forecast_rows    daily rows, 1-6; 0 = compact (no daily panel)
+ *   time_format      "12" | "24"; omit to follow Home Assistant
+ *   locale           BCP-47 tag; omit to follow Home Assistant, then browser
+ *   height           card height in px (default 440, compact 355)
+ *   animation        false freezes all motion
  */
 "use strict";
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 console.info("%c animated-sky-weather-card %c v" + VERSION + " ",
   "background:#1B2440;color:#F7C173;border-radius:3px 0 0 3px;padding:2px 0 2px 6px",
   "background:#F7C173;color:#1B2440;border-radius:0 3px 3px 0;padding:2px 6px 2px 0");
