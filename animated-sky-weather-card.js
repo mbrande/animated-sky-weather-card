@@ -40,9 +40,16 @@ const wxMixHex = (a, b, t) => {
 /* Sun position on the card. Azimuth: 90 = east (left) to 270 = west (right),
  * because the card is a south-facing window. Elevation 0 = horizon line,
  * 60+ = top of the sky area. Returns null when the sun is below -8deg. */
-const wxSunPos = (elevation, azimuth) => {
+const wxSunPos = (elevation, azimuth, south) => {
   if (elevation == null || elevation < -8) return null;
-  const x = 6 + wxClamp((azimuth - 90) / 180, 0, 1) * 88;
+  // North of the equator the sun crosses the SOUTH: azimuth runs 90 (east,
+  // left) -> 180 -> 270 (west, right). South of it the sun crosses the NORTH
+  // and a viewer facing that path sees east on their RIGHT, so the arc runs
+  // right to left and wraps through 0/360.
+  const t = south
+    ? 1 - wxClamp(((90 - azimuth + 360) % 360) / 180, 0, 1)
+    : wxClamp((azimuth - 90) / 180, 0, 1);
+  const x = 6 + t * 88;
   const y = 76 - wxClamp(elevation / 60, 0, 1) * 62 - wxClamp(elevation, -8, 0) * 1.5;
   return { x, y };
 };
@@ -257,17 +264,23 @@ const wxGhostPos = (pos, t) =>
 /* The now-dot's colour = the bar gradient sampled at the dot's position
  * (near-black start 0-24%, lo colour, hi colour) - identical by construction
  * to the pixels beneath it. */
-const wxDotColor = (cur, lo, hi) => {
-  const loC = wxTempColor(lo), hiC = wxTempColor(hi);
+const wxDotColor = (cur, lo, hi, unit) => {
+  const loC = wxTempColor(lo, unit), hiC = wxTempColor(hi, unit);
   const t = wxClamp(hi > lo ? (cur - lo) / (hi - lo) : 1, 0, 1);
   if (t <= 0.24) return wxMixHex(wxMixHex(loC, "#06090F", 0.55), loC, t / 0.24);
   return wxMixHex(loC, hiC, (t - 0.24) / 0.76);
 };
 
-/* Temp -> bar colour, simple warm scale (F). */
-const wxTempColor = (f) =>
-  f >= 95 ? "#E85200" : f >= 85 ? "#E27C0A" : f >= 76 ? "#D9A410"
+/* Temp -> bar colour on a warm scale. The ladder is Fahrenheit, so a
+ * Celsius reading is converted for the LOOKUP only - what the card prints
+ * is always the provider's own number in the user's own unit. */
+const wxToF = (t, unit) =>
+  String(unit || "").indexOf("C") >= 0 ? t * 9 / 5 + 32 : t;
+const wxTempColor = (t, unit) => {
+  const f = wxToF(t, unit);
+  return f >= 95 ? "#E85200" : f >= 85 ? "#E27C0A" : f >= 76 ? "#D9A410"
     : f >= 60 ? "#4693D1" : "#2A6FB8";
+};
 
 const WX_LABEL = { sunny: "Sunny", clear: "Clear", "clear-night": "Clear",
   partlycloudy: "Partly Cloudy", cloudy: "Cloudy", rainy: "Rain", pouring: "Heavy Rain",
@@ -971,6 +984,23 @@ class AnimatedSkyWeatherCard extends HTMLElement {
   }
   get _sun() { return this._hass ? this._hass.states["sun.sun"] : undefined; }
 
+  /* Displayed values always come from the provider; the unit is only needed
+   * to place them on the colour scale. */
+  get _unit() {
+    const s = this._s;
+    const attr = s && s.attributes ? s.attributes.temperature_unit : null;
+    if (attr) return attr;
+    const c = this._hass && this._hass.config;
+    const us = c && c.unit_system;
+    return (us && us.temperature) || "°F";
+  }
+
+  /* Below the equator the sun and moon cross the northern sky. */
+  get _south() {
+    const c = this._hass && this._hass.config;
+    return !!c && Number(c.latitude) < 0;
+  }
+
   _renderClock() {
     if (!this._els) return;
     const now = new Date();
@@ -1003,7 +1033,7 @@ class AnimatedSkyWeatherCard extends HTMLElement {
       `linear-gradient(180deg, ${top} 0%, ${mid} 55%, ${hor} 100%)`;
 
     // sun placement
-    const pos = wxSunPos(elev, az);
+    const pos = wxSunPos(elev, az, this._south);
     if (pos) {
       this._els.sun.style.left = pos.x + "%";
       this._els.sun.style.top = pos.y + "%";
@@ -1127,7 +1157,7 @@ class AnimatedSkyWeatherCard extends HTMLElement {
     if (lat == null || lng == null) { el.style.display = "none"; return; }
     const mp = wxAstro.moonPos(new Date(), lat, lng);
     const cover = this._lastCover || 0;
-    const pos = wxSunPos(mp.elevation, mp.azimuth);
+    const pos = wxSunPos(mp.elevation, mp.azimuth, this._south);
     if (mp.elevation < -1 || cover >= 70 || !pos) { el.style.display = "none"; return; }
     el.style.display = "block";
     el.style.left = pos.x + "%";
@@ -1232,6 +1262,7 @@ class AnimatedSkyWeatherCard extends HTMLElement {
       cond: d.condition, hi: Math.round(d.temperature), lo: Math.round(d.templow),
     }));
     const bars = wxBars(rows);
+    const unit = this._unit;
     if (rows.length && this._els.hilo) {
       this._els.hilo.textContent = `H:${rows[0].hi}°  L:${rows[0].lo}°`;
     }
@@ -1243,10 +1274,10 @@ class AnimatedSkyWeatherCard extends HTMLElement {
       `<div class="lo">${r.lo}°</div>` +
       `<div class="track"><div class="fill" style="left:${bars[i].left.toFixed(1)}%;` +
       `width:${bars[i].width.toFixed(1)}%;background:linear-gradient(90deg,` +
-      `${wxMixHex(wxTempColor(r.lo), "#06090F", 0.55)} 0%,` +
-      `${wxTempColor(r.lo)} 24%,${wxTempColor(r.hi)} 100%)"></div>` +
+      `${wxMixHex(wxTempColor(r.lo, unit), "#06090F", 0.55)} 0%,` +
+      `${wxTempColor(r.lo, unit)} 24%,${wxTempColor(r.hi, unit)} 100%)"></div>` +
       (i === 0 && dot != null ? `<div class="now" style="left:clamp(10px, ${dot.toFixed(1)}%, calc(100% - 10px));` +
-        `background:${wxDotColor(Number(cur), r.lo, r.hi)}"></div>` : "") +
+        `background:${wxDotColor(Number(cur), r.lo, r.hi, unit)}"></div>` : "") +
       `</div>` +
       `<div class="hi">${r.hi}°</div>`).join("");
   }

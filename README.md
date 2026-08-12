@@ -124,10 +124,14 @@ sky it draws) from real observations while keeping your model's temperatures and
 
 ## Notes
 
-- **Temperatures are currently rendered in °F.** The colour scale that tints the forecast bars
-  assumes Fahrenheit; °C support is planned before the first HACS-store submission.
-- Sun and moon mapping currently assumes a northern-hemisphere sky (the sun crossing the
-  south). Southern-hemisphere support is planned.
+- **°C and °F are both supported.** The card prints whatever your provider reports; the unit
+  (from the entity, else your Home Assistant unit system) is used only to place temperatures on
+  the colour scale, so a 30 °C day is coloured as the hot day it is.
+- **Both hemispheres are supported.** North of the equator the sun crosses the south and travels
+  left to right; south of it the sun crosses the north, so the card mirrors the arc — sunrise on
+  the right, sunset on the left, exactly as you would see it facing that path. The moon follows
+  the same mapping.
+- Dates and times are currently formatted for **en-US**; broader locale support is planned.
 - Textures (clouds, sprites) are procedurally generated — no third-party imagery.
 
 ## License
