@@ -72,10 +72,21 @@ Set `forecast_rows: 0` for a shorter card — sky, hero and hourly only:
 
 ### HACS (recommended)
 
-1. HACS → **⋮** → **Custom repositories**
-2. Add `https://github.com/mbrande/animated-sky-weather-card`, category **Dashboard** (Lovelace/plugin)
-3. Search for **Animated Sky Weather Card** → **Download**
-4. Refresh your browser (Ctrl/Cmd + Shift + R)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=mbrande&repository=animated-sky-weather-card&category=plugin)
+
+Or add it by hand:
+
+1. Open **HACS** in Home Assistant
+2. Top-right **⋮** menu → **Custom repositories**
+3. **Repository:** `https://github.com/mbrande/animated-sky-weather-card`
+4. **Type:** `Dashboard`
+5. Click **Add**, then find **Animated Sky Weather Card** in the HACS list and click
+   **Download**
+
+**HACS registers the dashboard resource for you** — there is nothing else to add.
+
+No Home Assistant restart is needed, but **force-close and reopen the companion
+app** (or hard-refresh the browser) so the new resource actually loads.
 
 ### Manual
 
