@@ -33,7 +33,7 @@
  */
 "use strict";
 
-const VERSION = "1.0.1";
+const VERSION = "1.0.2";
 console.info("%c animated-sky-weather-card %c v" + VERSION + " ",
   "background:#1B2440;color:#F7C173;border-radius:3px 0 0 3px;padding:2px 0 2px 6px",
   "background:#F7C173;color:#1B2440;border-radius:0 3px 3px 0;padding:2px 6px 2px 0");
@@ -135,7 +135,16 @@ const wxNowDot = (current, rows) => {
 const WX_OBS_FLOOR = { rainy: 60, pouring: 78, lightning: 65,
   "lightning-rainy": 78, snowy: 60, "snowy-rainy": 70, hail: 70,
   partlycloudy: 40, cloudy: 75, fog: 90 };
+/* ...and the reverse: a CLEAR observation is authoritative too, so a high
+ * coverage reading cannot hang an overcast on a sky the observer calls clear.
+ * The floor alone was one-directional: a clear-night observation against a
+ * 75% coverage sensor drew six cloud banks, a half-strength overcast ceiling
+ * and a veiled sky, and hid the moon (_updateMoon bails at cover >= 70).
+ * Same clear set as wxScene and wxIcon: "sunny" and "clear" mean a cloudless
+ * sky by day as much as by night. */
+const WX_CLEAR = new Set(["sunny", "clear", "clear-night"]);
 const wxCoverEff = (real, coverageAttr, condition) => {
+  if (WX_CLEAR.has(condition || "")) return 0;
   if (real != null && isFinite(real))
     return Math.max(Number(real), WX_OBS_FLOOR[condition] || 0);
   return wxCover(coverageAttr, condition);

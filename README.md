@@ -120,7 +120,7 @@ time_format: "12"
 |---|---|---|---|
 | `entity` | string | **required** | Weather entity for temperature, hourly and daily forecasts |
 | `current_entity` | string | — | Optional second weather entity used **only** for the current condition. Point this at a national observation integration (NWS, Met Office, DWD, KNMI, Environment Canada) when your forecast provider's "current" condition lags reality. Falls back to `entity`. |
-| `coverage_entity` | string | — | Optional sensor reporting cloud cover in **percent**. Drives cloud density directly; without it the condition sets the density. |
+| `coverage_entity` | string | — | Optional sensor reporting cloud cover in **percent**. Drives cloud density directly; without it the condition sets the density. A cloudy-type observation raises a low reading (so a lagging sensor can't leave a clear sky under an overcast label), and a clear observation — `sunny`, `clear`, `clear-night` — clears the sky outright, so a high model reading can't cloud over a night your observer calls clear. |
 | `city` | string | — | Name shown above the temperature. Omit to show none. |
 | `forecast_rows` | number | `4` | Daily rows (1–6). **`0` = compact mode**: no daily panel. |
 | `time_format` | string | follows Home Assistant | `"12"` or `"24"` to force a clock; omit it and the card uses your Home Assistant time-format setting (which can itself follow your language or system). |
