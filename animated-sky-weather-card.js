@@ -5,8 +5,8 @@
  * - The sun is drawn where it actually is (azimuth -> x, elevation -> y):
  *   an overexposed core + bloom (screen-blended so it lights the sky),
  *   diffraction starburst, anamorphic streak, horizon warmth and lens ghosts.
- *   At night: the real moon - position AND phase computed from your latitude
- *   and longitude - plus twinkling stars.
+ *   At night: the real moon - a photo-real cratered surface, position AND
+ *   phase computed from your latitude and longitude - plus twinkling stars.
  * - Volumetric clouds: clusters of billboarded, self-shaded puff sprites in a
  *   CSS 3D world, sized and thickened by live cloud coverage, on period-locked
  *   drift trains so an overcast sky never opens a hole.
@@ -33,7 +33,7 @@
  */
 "use strict";
 
-const VERSION = "1.0.2";
+const VERSION = "1.0.3";
 console.info("%c animated-sky-weather-card %c v" + VERSION + " ",
   "background:#1B2440;color:#F7C173;border-radius:3px 0 0 3px;padding:2px 0 2px 6px",
   "background:#F7C173;color:#1B2440;border-radius:0 3px 3px 0;padding:2px 6px 2px 0");
@@ -602,11 +602,24 @@ class AnimatedSkyWeatherCard extends HTMLElement {
         .moon { position: absolute; width: 58px; height: 58px;
                 margin: -29px 0 0 -29px; border-radius: 50%; display: none;
                 overflow: hidden;
-                background: radial-gradient(circle at 38% 36%, #F4F7FF 0%, #D9E0F2 55%, #AEB9D6 100%);
-                box-shadow: 0 0 34px 8px rgba(214,226,255,.35), inset -6px -5px 0 rgba(140,152,190,.35);
+                background-color: #D9E0F2;
+                /* photo-real surface: self-generated lunar texture (maria, craters,
+                 * ray systems), x-tileable so it can drift forever; a limb-darkening
+                 * gradient rides on top to keep the sphere reading round. */
+                background-image:
+                  radial-gradient(circle at 38% 36%, rgba(255,255,255,.22) 0%, rgba(214,224,242,0) 46%, rgba(64,76,114,.58) 100%),
+                  url("data:image/webp;base64,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");
+                background-size: 100% 100%, auto 100%;
+                background-repeat: no-repeat, repeat-x;
+                background-position: 0 0, 0 0;
+                animation: moonspin 240s linear infinite;
+                box-shadow: 0 0 34px 8px rgba(214,226,255,.35),
+                  inset -9px -7px 16px rgba(25,35,65,.5),
+                  inset 5px 4px 10px rgba(255,255,255,.35);
                 transition: left 60s linear, top 60s linear, opacity 2.5s ease; }
+        @keyframes moonspin { to { background-position: 0 0, -116px 0; } }
         .moon .shade { position: absolute; inset: -2px; border-radius: 50%;
-                background: rgba(9,13,28,.94);
+                background: rgba(9,13,28,.94); filter: blur(1.2px);
                 transform: translateX(var(--mshift, 0px)); transition: transform 2s ease; }
         .stars { display: none; }
         .star { position: absolute; width: 2px; height: 2px; border-radius: 50%;
