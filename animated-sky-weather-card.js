@@ -33,7 +33,7 @@
  */
 "use strict";
 
-const VERSION = "1.0.3";
+const VERSION = "1.1.0";
 console.info("%c animated-sky-weather-card %c v" + VERSION + " ",
   "background:#1B2440;color:#F7C173;border-radius:3px 0 0 3px;padding:2px 0 2px 6px",
   "background:#F7C173;color:#1B2440;border-radius:0 3px 3px 0;padding:2px 6px 2px 0");
@@ -149,6 +149,29 @@ const wxCoverEff = (real, coverageAttr, condition) => {
     return Math.max(Number(real), WX_OBS_FLOOR[condition] || 0);
   return wxCover(coverageAttr, condition);
 };
+
+/* High cirrus veil: the sky observer reads clear (METAR ceilometers are blind
+ * above ~12,000 ft) while the coverage model insists the sky is heavily
+ * covered - that contradiction IS the high-thin-cloud signature (2026-08-13:
+ * KRIV AUTO said CLR under a deck KONT's augmented obs put at 27,000 ft).
+ * Renders as a translucent milky wash, never as cumulus banks. */
+const wxVeil = (condition, realCover) => {
+  if (!WX_CLEAR.has(condition || "")) return 0;
+  if (realCover == null || !isFinite(realCover) || realCover < 60) return 0;
+  return Math.min(1, (realCover - 60) / 40);
+};
+
+/* Observed conditions lag the terminator in BOTH directions: METAR-fed
+ * integrations keep reporting clear-night for up to an hour after sunrise,
+ * and model providers report sunny after dusk. The sky gradient already
+ * follows the REAL sun (sun.sun) - the condition must follow it too. */
+const wxDayCond = (condition, night) => {
+  if (!night && condition === "clear-night") return "sunny";
+  if (night && (condition === "sunny" || condition === "clear")) return "clear-night";
+  return condition;
+};
+
+
 
 /* Effective cloud coverage %: live cloud_coverage floored by what the
  * condition implies, so a lagging condition string cannot hide a full sky. */
@@ -695,6 +718,21 @@ class AnimatedSkyWeatherCard extends HTMLElement {
         /* scope to the LAYER elements: the sky itself wears scene classes with
          * the same names (sky.rain), and a bare .rain selector hid the whole
          * card on the first rainy day of its life */
+        .layer.veil { display: none; position: absolute; inset: 0;
+          opacity: var(--veilo, 0); transition: opacity 3s ease; }
+        .sky.hiveil .layer.veil { display: block; }
+        .veilw { display: block; position: absolute; inset: -20% -60%; }
+        .veilw.v1 { background:
+            radial-gradient(120% 60% at 30% 20%, rgba(205,214,232,.50) 0%, rgba(205,214,232,0) 70%),
+            radial-gradient(140% 70% at 75% 55%, rgba(196,206,226,.42) 0%, rgba(196,206,226,0) 72%);
+          animation: veildrift 150s linear infinite alternate; }
+        .veilw.v2 { background:
+            radial-gradient(130% 55% at 60% 30%, rgba(214,222,238,.36) 0%, rgba(214,222,238,0) 68%),
+            linear-gradient(100deg, rgba(200,210,230,0) 20%, rgba(200,210,230,.30) 50%, rgba(200,210,230,0) 80%);
+          animation: veildrift 210s linear infinite alternate-reverse; }
+        @keyframes veildrift { to { transform: translateX(9%); } }
+        .sky.hiveil .layer.stars { opacity: calc(1 - var(--veilo, 0) * .6); }
+        .sky.hiveil .spikes, .sky.hiveil .streak { opacity: .5; }
         .layer.rain, .layer.snow, .layer.fog, .layer.flash, .layer.leaves { display: none; }
         .drop { position: absolute; top: -24px; width: 2px; border-radius: 1px;
                 background: linear-gradient(rgba(160,205,245,0), rgba(160,205,245,.75));
@@ -911,6 +949,7 @@ class AnimatedSkyWeatherCard extends HTMLElement {
           <div class="layer ghosts"><div class="ghost g1"></div><div class="ghost g2"></div><div class="ghost g3"></div></div>
           <div class="moon"><div class="shade"></div></div>
           <div class="layer clouds"></div>
+          <div class="layer veil"><b class="veilw v1"></b><b class="veilw v2"></b></div>
           <div class="layer shafts"></div>
           <div class="layer rain"></div>
           <div class="layer snow"></div>
@@ -1108,8 +1147,8 @@ class AnimatedSkyWeatherCard extends HTMLElement {
     const sun = this._sun;
     const elev = sun ? Number(sun.attributes.elevation) : null;
     const az = sun ? Number(sun.attributes.azimuth) : 180;
-    const cond = this._curCond;
     const night = elev != null ? elev < -4 : false;
+    const cond = wxDayCond(this._curCond, night);
 
     this._els.sky.classList.toggle("noanim", this._config.animation === false);
 
@@ -1192,6 +1231,12 @@ class AnimatedSkyWeatherCard extends HTMLElement {
     }
     const cover = wxCoverEff(realCover,
       this._config.demo ? null : (s ? s.attributes.cloud_coverage : null), cond);
+    const veil = wxVeil(cond, realCover);
+    this._veil = veil;
+    this._veilLabel = veil > 0 ? (realCover >= 85 ? "cloudy" : "partlycloudy") : null;
+    this._shownCond = this._veilLabel || cond;
+    this._els.sky.classList.toggle("hiveil", veil > 0);
+    this._els.sky.style.setProperty("--veilo", veil > 0 ? (0.3 + 0.5 * veil).toFixed(2) : "0");
     const dark = /pour|storm|severe/.test(scene);
     const dim = !dark && /rain|sleet|hail/.test(scene);
     this._cloudScale = (this._fogDense ? 1.22 : 1) * (0.5 + 0.5 * Math.min(1, cover / 85));
@@ -1227,9 +1272,8 @@ class AnimatedSkyWeatherCard extends HTMLElement {
     if (s) {
       const t = s.attributes.temperature;
       this._els.bigtemp.textContent = t != null ? Math.round(t) + "°" : "--";
-      // providers report 'sunny' around the clock; after dark that reads 'Clear'
-      const oc = this._curCond;
-      const condLabel = night && (oc === "sunny" || oc === "clear") ? "clear-night" : oc;
+      // providers lag the terminator; show the sun-normalized condition
+      const condLabel = this._veilLabel || wxDayCond(this._curCond, night);
       // Home Assistant already translates weather states; use its string when
       // the condition really is that entity's state (not a demo override)
       let text = "";
@@ -1264,7 +1308,8 @@ class AnimatedSkyWeatherCard extends HTMLElement {
       sep = wxAngSep(Number(this._sun.attributes.elevation), Number(this._sun.attributes.azimuth),
         mp.elevation, mp.azimuth);
     }
-    const vis = wxMoonVis(ill.fraction, !!sunUp, sep);
+    let vis = wxMoonVis(ill.fraction, !!sunUp, sep);
+    vis = +(vis * (1 - (this._veil || 0) * 0.45)).toFixed(2);
     if (vis <= 0.02) { el.style.display = "none"; return; }
     el.style.opacity = String(vis);
     const shift = (ill.fraction * 62) * (ill.waxing ? -1 : 1);
@@ -1299,7 +1344,8 @@ class AnimatedSkyWeatherCard extends HTMLElement {
     // present moment simply is not in the forecast data.
     const cs = this._s;
     if (cs && cs.attributes.temperature != null) {
-      slots.push({ nowcast: { condition: this._curCond, temperature: cs.attributes.temperature } });
+      slots.push({ nowcast: { condition: this._shownCond || this._curCond,
+        temperature: cs.attributes.temperature } });
     }
     // drop a current-hour entry if the provider DID include one - Now covers it
     while (upcoming.length && new Date(upcoming[0].datetime).getTime() <= now) {
