@@ -33,7 +33,7 @@
  */
 "use strict";
 
-const VERSION = "1.1.0";
+const VERSION = "1.1.1";
 console.info("%c animated-sky-weather-card %c v" + VERSION + " ",
   "background:#1B2440;color:#F7C173;border-radius:3px 0 0 3px;padding:2px 0 2px 6px",
   "background:#F7C173;color:#1B2440;border-radius:0 3px 3px 0;padding:2px 6px 2px 0");
@@ -170,6 +170,12 @@ const wxDayCond = (condition, night) => {
   if (night && (condition === "sunny" || condition === "clear")) return "clear-night";
   return condition;
 };
+
+/* Conditions where the MODEL is asserting real cloud, not haze. Used only by
+ * the daytime override below - precipitation still requires an observation. */
+const WX_MODEL_CLOUDY = new Set(["cloudy", "fog", "rainy", "pouring",
+  "lightning", "lightning-rainy", "snowy", "snowy-rainy", "hail", "exceptional"]);
+
 
 
 
@@ -1148,7 +1154,22 @@ class AnimatedSkyWeatherCard extends HTMLElement {
     const elev = sun ? Number(sun.attributes.elevation) : null;
     const az = sun ? Number(sun.attributes.azimuth) : 180;
     const night = elev != null ? elev < -4 : false;
-    const cond = wxDayCond(this._curCond, night);
+    let realCover = null;
+    if (!this._config.demo && this._config.coverage_entity && this._hass.states[this._config.coverage_entity]) {
+      const rc = Number(this._hass.states[this._config.coverage_entity].state);
+      if (isFinite(rc)) realCover = rc;
+    }
+    let cond = wxDayCond(this._curCond, night);
+    // Daytime model-agreement override: the observer is blind above ~12k ft
+    // and lags a forming deck by up to an hour; when the sun is UP and BOTH
+    // model signals insist (cloudy-family condition AND coverage >= 85) while
+    // the observer reads clear, render the full overcast - by day a deck is
+    // unambiguous to the eye. Twilight and night keep the veil compromise.
+    const modelCloudy = elev != null && elev > 0 && WX_CLEAR.has(cond)
+      && realCover != null && isFinite(realCover) && realCover >= 85
+      && !!s && WX_MODEL_CLOUDY.has(s.state || "");
+    if (modelCloudy) cond = "cloudy";
+
 
     this._els.sky.classList.toggle("noanim", this._config.animation === false);
 
@@ -1224,16 +1245,12 @@ class AnimatedSkyWeatherCard extends HTMLElement {
 
     // cloud banks: density from LIVE coverage, floored by the condition -
     // runs every render so a coverage change repaints without a scene change
-    let realCover = null;
-    if (!this._config.demo && this._config.coverage_entity && this._hass.states[this._config.coverage_entity]) {
-      const rc = Number(this._hass.states[this._config.coverage_entity].state);
-      if (isFinite(rc)) realCover = rc;
-    }
     const cover = wxCoverEff(realCover,
       this._config.demo ? null : (s ? s.attributes.cloud_coverage : null), cond);
     const veil = wxVeil(cond, realCover);
     this._veil = veil;
-    this._veilLabel = veil > 0 ? (realCover >= 85 ? "cloudy" : "partlycloudy") : null;
+    this._veilLabel = modelCloudy ? "cloudy"
+      : (veil > 0 ? (realCover >= 85 ? "cloudy" : "partlycloudy") : null);
     this._shownCond = this._veilLabel || cond;
     this._els.sky.classList.toggle("hiveil", veil > 0);
     this._els.sky.style.setProperty("--veilo", veil > 0 ? (0.3 + 0.5 * veil).toFixed(2) : "0");
