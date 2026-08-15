@@ -22,6 +22,8 @@
  *
  * Config:
  *   entity           (required) weather entity for temperature and forecasts
+ *   forecast_entity  optional entity whose forecast replaces entity's; NWS
+ *                    day/night entities are merged into daily rows
  *   current_entity   optional entity used ONLY for the observed condition
  *   coverage_entity  optional sensor reporting cloud cover in percent
  *   city             name shown above the temperature
@@ -33,7 +35,7 @@
  */
 "use strict";
 
-const VERSION = "1.1.1";
+const VERSION = "1.2.0";
 console.info("%c animated-sky-weather-card %c v" + VERSION + " ",
   "background:#1B2440;color:#F7C173;border-radius:3px 0 0 3px;padding:2px 0 2px 6px",
   "background:#F7C173;color:#1B2440;border-radius:0 3px 3px 0;padding:2px 6px 2px 0");
@@ -175,6 +177,33 @@ const wxDayCond = (condition, night) => {
  * the daytime override below - precipitation still requires an observation. */
 const WX_MODEL_CLOUDY = new Set(["cloudy", "fog", "rainy", "pouring",
   "lightning", "lightning-rainy", "snowy", "snowy-rainy", "hail", "exceptional"]);
+
+/* Same calendar day in LOCAL time - forecast rows must be labeled by their
+ * DATES, not their position: providers drop today from the daily list as the
+ * evening advances (open-meteo's day rolls at UTC midnight = 5 PM Pacific),
+ * and a positional "Today" then mislabels the whole week by one day. */
+const wxSameLocalDay = (a, b) =>
+  a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() &&
+  a.getDate() === b.getDate();
+
+/* NWS-style entities forecast in day/night PERIODS (twice_daily) and reject
+ * type=daily outright. Fold periods into daily rows: each daytime period
+ * brings the high + condition, the following night brings the low. A leading
+ * lone night (evening fetch) is dropped, and a trailing day without its
+ * night is dropped too - a row without a low has nothing to draw. */
+const wxMergeTwiceDaily = (periods) => {
+  const out = [];
+  for (let i = 0; i < (periods || []).length; i++) {
+    const p = periods[i];
+    if (p.is_daytime === false) continue;
+    const nxt = periods[i + 1];
+    if (!nxt || nxt.is_daytime !== false) continue;
+    out.push({ datetime: p.datetime, condition: p.condition,
+      temperature: p.temperature, templow: nxt.temperature });
+  }
+  return out;
+};
+
 
 
 
@@ -537,24 +566,30 @@ class AnimatedSkyWeatherCard extends HTMLElement {
     this._fcTimer = setInterval(() => this._fetchForecast(), 30 * 60 * 1000);
   }
 
+  async _wsForecast(entity, type) {
+    const r = await this._hass.callWS({
+      type: "call_service", domain: "weather", service: "get_forecasts",
+      service_data: { entity_id: entity, type: type },
+      return_response: true,
+    });
+    const fc = r && r.response && r.response[entity];
+    return (fc && fc.forecast) || [];
+  }
+
   async _fetchForecast() {
     if (!this._hass) return;
+    const fe = this._config.forecast_entity || this._config.entity;
     try {
-      const r = await this._hass.callWS({
-        type: "call_service", domain: "weather", service: "get_forecasts",
-        service_data: { entity_id: this._config.entity, type: "daily" },
-        return_response: true,
-      });
-      const fc = r && r.response && r.response[this._config.entity];
-      this._forecast = (fc && fc.forecast) || [];
+      let daily;
+      try {
+        daily = await this._wsForecast(fe, "daily");
+      } catch (e) {
+        // NWS-style entities only speak day/night periods
+        daily = wxMergeTwiceDaily(await this._wsForecast(fe, "twice_daily"));
+      }
+      this._forecast = daily;
       this._renderForecast();
-      const rh = await this._hass.callWS({
-        type: "call_service", domain: "weather", service: "get_forecasts",
-        service_data: { entity_id: this._config.entity, type: "hourly" },
-        return_response: true,
-      });
-      const fh = rh && rh.response && rh.response[this._config.entity];
-      this._hourly = (fh && fh.forecast) || [];
+      this._hourly = await this._wsForecast(fe, "hourly");
       this._renderHourly();
     } catch (e) { /* keep the previous forecast; the scene still works */ }
   }
@@ -1422,10 +1457,13 @@ class AnimatedSkyWeatherCard extends HTMLElement {
     }
     const n = wxClamp(Number(this._config.forecast_rows) || 4, 1, 6);
     const rows = this._forecast.slice(0, n).map((d) => ({
+      dt: new Date(d.datetime),
       day: new Date(d.datetime).toLocaleDateString(
         wxLocale(this._hass, this._config), { weekday: "short" }),
       cond: d.condition, hi: Math.round(d.temperature), lo: Math.round(d.templow),
     }));
+    // label by DATE - after the provider drops today, row 0 is tomorrow
+    const todayIdx = rows.findIndex((r) => wxSameLocalDay(r.dt, new Date()));
     const bars = wxBars(rows);
     const unit = this._unit;
     if (rows.length && this._els.hilo) {
@@ -1434,14 +1472,14 @@ class AnimatedSkyWeatherCard extends HTMLElement {
     const cur = this._s ? this._s.attributes.temperature : null;
     const dot = wxNowDot(cur, rows);
     this._els.fc.innerHTML = rows.map((r, i) =>
-      `<div class="day">${i === 0 ? "Today" : r.day}</div>` +
-      `<svg viewBox="0 0 24 24">${WX_ICONS[wxIconFor(r.cond, i === 0 ? night : false)]}</svg>` +
+      `<div class="day">${i === todayIdx ? "Today" : r.day}</div>` +
+      `<svg viewBox="0 0 24 24">${WX_ICONS[wxIconFor(r.cond, i === todayIdx ? night : false)]}</svg>` +
       `<div class="lo">${r.lo}°</div>` +
       `<div class="track"><div class="fill" style="left:${bars[i].left.toFixed(1)}%;` +
       `width:${bars[i].width.toFixed(1)}%;background:linear-gradient(90deg,` +
       `${wxMixHex(wxTempColor(r.lo, unit), "#06090F", 0.55)} 0%,` +
       `${wxTempColor(r.lo, unit)} 24%,${wxTempColor(r.hi, unit)} 100%)"></div>` +
-      (i === 0 && dot != null ? `<div class="now" style="left:clamp(10px, ${dot.toFixed(1)}%, calc(100% - 10px));` +
+      (i === todayIdx && dot != null ? `<div class="now" style="left:clamp(10px, ${dot.toFixed(1)}%, calc(100% - 10px));` +
         `background:${wxDotColor(Number(cur), r.lo, r.hi, unit)}"></div>` : "") +
       `</div>` +
       `<div class="hi">${r.hi}°</div>`).join("");
