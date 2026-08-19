@@ -35,7 +35,7 @@
  */
 "use strict";
 
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
 console.info("%c animated-sky-weather-card %c v" + VERSION + " ",
   "background:#1B2440;color:#F7C173;border-radius:3px 0 0 3px;padding:2px 0 2px 6px",
   "background:#F7C173;color:#1B2440;border-radius:0 3px 3px 0;padding:2px 6px 2px 0");
@@ -207,6 +207,23 @@ const wxMergeTwiceDaily = (periods) => {
 
 
 
+
+/* Today's daytime period expires around 6pm, leaving an orphan night period
+ * that wxMergeTwiceDaily drops - so the panel loses today for the rest of the
+ * evening. Rebuild it: the night period carries tonight's low and a condition,
+ * and today's high has already happened so it comes from observed history.
+ * Returns null unless BOTH halves are real - never fabricate a row. */
+const wxTodayFromNight = (periods, observedHigh, now) => {
+  const p = (periods || [])[0];
+  if (!p || p.is_daytime !== false) return null;
+  const dt = new Date(p.datetime);
+  if (!wxSameLocalDay(dt, now)) return null;
+  const lo = Number(p.temperature);
+  const hi = Number(observedHigh);
+  if (!isFinite(lo) || !isFinite(hi) || hi < lo) return null;
+  return { datetime: p.datetime, condition: p.condition,
+           temperature: hi, templow: lo };
+};
 
 /* Effective cloud coverage %: live cloud_coverage floored by what the
  * condition implies, so a lagging condition string cannot hide a full sky. */
@@ -576,6 +593,36 @@ class AnimatedSkyWeatherCard extends HTMLElement {
     return (fc && fc.forecast) || [];
   }
 
+  /* Highest temperature this entity has actually reported since local midnight.
+   * history_during_period returns compressed rows and only repeats attributes
+   * when they change, so carry the last seen value forward. */
+  async _todayMax(entity) {
+    try {
+      const start = new Date();
+      start.setHours(0, 0, 0, 0);
+      const r = await this._hass.callWS({
+        type: "history/history_during_period",
+        start_time: start.toISOString(),
+        entity_ids: [entity],
+        minimal_response: false,
+        no_attributes: false,
+        // Defaults to true, which drops most of the day and understates the
+        // high (94 vs the real 103 on 2026-08-18). We need the whole curve.
+        significant_changes_only: false,
+      });
+      const rows = (r && r[entity]) || [];
+      let cur = null, max = null;
+      for (const row of rows) {
+        const t = row && row.a && row.a.temperature;
+        if (t != null && isFinite(Number(t))) cur = Number(t);
+        if (cur != null && (max == null || cur > max)) max = cur;
+      }
+      return max;
+    } catch (e) {
+      return null;   // no recorder, no history, no problem - just no today row
+    }
+  }
+
   async _fetchForecast() {
     if (!this._hass) return;
     const fe = this._config.forecast_entity || this._config.entity;
@@ -585,7 +632,16 @@ class AnimatedSkyWeatherCard extends HTMLElement {
         daily = await this._wsForecast(fe, "daily");
       } catch (e) {
         // NWS-style entities only speak day/night periods
-        daily = wxMergeTwiceDaily(await this._wsForecast(fe, "twice_daily"));
+        const periods = await this._wsForecast(fe, "twice_daily");
+        daily = wxMergeTwiceDaily(periods);
+        // Today's daytime period has expired - rebuild the row so the panel
+        // (and the current-temp dot) still has a today to sit on.
+        const now = new Date();
+        if (!daily.some((d) => wxSameLocalDay(new Date(d.datetime), now))) {
+          const hi = await this._todayMax(this._config.entity);
+          const today = wxTodayFromNight(periods, hi, now);
+          if (today) daily = [today].concat(daily);
+        }
       }
       this._forecast = daily;
       this._renderForecast();
