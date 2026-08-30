@@ -127,7 +127,7 @@ time_format: "12"
 | `locale` | string | follows Home Assistant | BCP-47 tag (e.g. `"de-DE"`) to force date/time formatting. Omit it and the card follows your Home Assistant language, then the browser. |
 | `height` | number | `440` (compact: `355`) | Card height in pixels |
 | `animation` | boolean | `true` | `false` freezes all motion |
-| `camera` | boolean | `true` | `false` pins the cloud volume: no breathing tilt; everything else still moves |
+| `camera` | `auto` / boolean | `auto` | The cloud volume's breathing tilt. `auto` = on, except on iOS (companion app and Safari), where a loaded dashboard cannot afford it and it is pinned; `true` forces it on there, `false` pins it everywhere. Everything else keeps moving |
 | `camera_fps` | number | `5` | How often the cloud volume's tilt is updated, per second. `0` = every display frame (smooth easeInOutSine). Keep it low: on the iOS companion app every update re-projects every puff layer, and at the display rate that crashes the web view |
 | `max_sprites` | number | — | Cap on puffs per cloud train (normally 10–15, fog 16–21). A lever for low-end devices |
 
