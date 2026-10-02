@@ -20,7 +20,7 @@ embedded in the card.
 | | |
 |---|---|
 | **Real sun** | Position from `sun.sun` azimuth/elevation — overexposed core, bloom that lights the sky, diffraction starburst, anamorphic streak and lens ghosts. Hazes to a glow when cloud cover climbs above 70%. |
-| **Real moon** | Position **and phase** computed from your latitude/longitude — no extra integration. Fades by illumination and hides when it's too near the sun to be visible. |
+| **Real moon** | Position, **phase and tilt** computed from your latitude/longitude — no extra integration. The terminator curves the way the real one does, the lit side faces the real sun, and the unlit side lets the sky through (with a faint earthshine beside a night-time crescent). Fades by illumination and hides when it's too near the sun to be visible. |
 | **Volumetric clouds** | Clusters of self-shaded puff sprites in a CSS 3D world, spinning and drifting with depth parallax. Cover drives their size, count and opacity; period-locked drift trains mean an overcast sky never opens a hole. |
 | **Weather scenes** | 15 conditions, each with its own look — see the table below. |
 | **Panel interaction** | Rain, hail and snow hit the hourly panel: splashes ricochet, hailstones bounce, snow accumulates and melts. Every impact comes from a drop you can watch fall. |

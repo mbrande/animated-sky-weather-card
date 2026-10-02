@@ -5,8 +5,9 @@
  * - The sun is drawn where it actually is (azimuth -> x, elevation -> y):
  *   an overexposed core + bloom (screen-blended so it lights the sky),
  *   diffraction starburst, anamorphic streak, horizon warmth and lens ghosts.
- *   At night: the real moon - a photo-real cratered surface, position AND
- *   phase computed from your latitude and longitude - plus twinkling stars.
+ *   At night: the real moon - a photo-real cratered surface, position, phase
+ *   AND tilt computed from your latitude and longitude, the terminator curved
+ *   the way the real one is - plus twinkling stars.
  * - Volumetric clouds: clusters of billboarded, self-shaded puff sprites in a
  *   CSS 3D world, sized and thickened by live cloud coverage, on period-locked
  *   drift trains so an overcast sky never opens a hole.
@@ -42,7 +43,7 @@
  */
 "use strict";
 
-const VERSION = "1.4.1";
+const VERSION = "1.5.0";
 console.info("%c animated-sky-weather-card %c v" + VERSION + " ",
   "background:#1B2440;color:#F7C173;border-radius:3px 0 0 3px;padding:2px 0 2px 6px",
   "background:#F7C173;color:#1B2440;border-radius:0 3px 3px 0;padding:2px 6px 2px 0");
@@ -275,7 +276,9 @@ const wxAstro = (() => {
     let h = Math.asin(Math.sin(phi) * Math.sin(c.dec) + Math.cos(phi) * Math.cos(c.dec) * Math.cos(H));
     h = h + rad * 0.017 / Math.tan(h + rad * 10.26 / (h + rad * 5.10));
     const az = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(c.dec) * Math.cos(phi));
-    return { elevation: h / rad, azimuth: (az / rad + 180 + 360) % 360 };
+    // parallactic angle: how far the moon's north has turned away from "up"
+    const pa = Math.atan2(Math.sin(H), Math.tan(phi) * Math.cos(c.dec) - Math.sin(c.dec) * Math.cos(H));
+    return { elevation: h / rad, azimuth: (az / rad + 180 + 360) % 360, parallactic: pa / rad };
   };
   const moonIllum = (date) => {
     const d = toDays(date), su = sunCoords(d), m = moonCoords(d), sdist = 149598000;
@@ -283,7 +286,8 @@ const wxAstro = (() => {
     const inc = Math.atan2(sdist * Math.sin(phi2), m.dist - sdist * Math.cos(phi2));
     const angle = Math.atan2(Math.cos(su.dec) * Math.sin(su.ra - m.ra),
       Math.sin(su.dec) * Math.cos(m.dec) - Math.cos(su.dec) * Math.sin(m.dec) * Math.cos(su.ra - m.ra));
-    return { fraction: (1 + Math.cos(inc)) / 2, waxing: angle < 0 };
+    // angle: position angle of the bright limb, eastward from the moon's north
+    return { fraction: (1 + Math.cos(inc)) / 2, waxing: angle < 0, angle: angle / rad };
   };
   return { moonPos, moonIllum };
 })();
@@ -343,6 +347,33 @@ const wxMoonVis = (fraction, sunUp, sepFromSun) => {
   const base = sunUp ? 0.4 : 1;
   const lit = sunUp ? Math.min(1, fraction * 4) : Math.min(1, 0.25 + fraction * 1.5);
   return +(base * lit).toFixed(2);
+};
+
+/* The moon's lit shape as the observer sees it, as a CSS mask image (58px disc).
+ * fraction: illuminated fraction - also the lit share of the disc's AREA. The
+ *   terminator is half an ellipse with semi-axis r*|2f-1|: it bulges toward
+ *   the bright limb for a crescent and toward the DARK limb once past half.
+ *   (A disc slid across the face can only ever draw an eclipse's bite.)
+ * limb: where the bright limb points, degrees counter-clockwise from straight
+ *   up as the observer sees it (bright-limb position angle minus parallactic
+ *   angle) - a high morning moon is lit from above, an evening crescent lies
+ *   on its back toward the set sun.
+ * earth: opacity left on the night side (earthshine); 0 lets the sky through.
+ * The lit region runs out past the disc on the bright side, so only the
+ * terminator is feathered - the element's round clip keeps the limb crisp. */
+const wxMoonMask = (fraction, limb, earth) => {
+  const f = wxClamp(fraction, 0, 1), r = 29;
+  const rx = (r * Math.abs(2 * f - 1)).toFixed(2);
+  const sweep = f > 0.5 ? 1 : 0;
+  // the terminator foreshortens to a hairline as it nears the limb
+  const blur = (0.6 + 2.2 * Math.sqrt(f * (1 - f))).toFixed(2);
+  const night = earth > 0.005 ? `<rect x="-${r}" y="-${r}" width="${2 * r}" height="${2 * r}" ` +
+    `fill="#fff" fill-opacity="${earth.toFixed(3)}"/>` : "";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-${r} -${r} ${2 * r} ${2 * r}">` +
+    `<filter id="t"><feGaussianBlur stdDeviation="${blur}"/></filter>${night}` +
+    `<path fill="#fff" filter="url(#t)" transform="rotate(${(-90 - limb).toFixed(1)})" ` +
+    `d="M0 -${r}V-64H64V64H0V${r}A${rx} ${r} 0 0 ${sweep} 0 -${r}Z"/></svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 };
 
 /* Is timestamp t at night, given the NEXT rising/setting times (both in the
@@ -747,27 +778,37 @@ class AnimatedSkyWeatherCard extends HTMLElement {
 
         /* --- moon + stars --- */
         .moon { position: absolute; width: 58px; height: 58px;
-                margin: -29px 0 0 -29px; border-radius: 50%; display: none;
-                overflow: hidden;
+                margin: -29px 0 0 -29px; display: none;
+                transition: left 60s linear, top 60s linear, opacity 2.5s ease; }
+        /* moonlight scattered by the air, centred on the LIT part (a crescent's
+         * glow hugs its bright limb) and spread over the night side as well, so
+         * the dark limb never gets an edge of its own */
+        .moon .mglow { position: absolute; left: -46px; top: -46px; width: 150px; height: 150px;
+                border-radius: 50%; pointer-events: none;
+                background: radial-gradient(closest-side, rgba(214,226,255,.3),
+                  rgba(214,226,255,.22) 38%, rgba(214,226,255,.16) 50%, rgba(214,226,255,.07) 66%,
+                  rgba(214,226,255,.03) 80%, rgba(214,226,255,0));
+                transform: translate(var(--mgx, 0px), var(--mgy, 0px));
+                opacity: var(--mgo, 1); }
+        .moon .mface { position: absolute; inset: 0; border-radius: 50%; overflow: hidden;
                 background-color: #D9E0F2;
                 /* photo-real surface: self-generated lunar texture (maria, craters,
                  * ray systems), x-tileable so it can drift forever; a limb-darkening
-                 * gradient rides on top to keep the sphere reading round. */
+                 * gradient rides on top, its highlight turned toward the sun. */
                 background-image:
-                  radial-gradient(circle at 38% 36%, rgba(255,255,255,.22) 0%, rgba(214,224,242,0) 46%, rgba(64,76,114,.58) 100%),
+                  radial-gradient(circle at var(--mhx, 38%) var(--mhy, 36%), rgba(255,255,255,.22) 0%, rgba(214,224,242,0) 46%, rgba(64,76,114,.58) 100%),
                   url("data:image/webp;base64,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");
                 background-size: 100% 100%, auto 100%;
                 background-repeat: no-repeat, repeat-x;
                 background-position: 0 0, 0 0;
                 animation: moonspin 240s linear infinite;
-                box-shadow: 0 0 34px 8px rgba(214,226,255,.35),
-                  inset -9px -7px 16px rgba(25,35,65,.5),
-                  inset 5px 4px 10px rgba(255,255,255,.35);
-                transition: left 60s linear, top 60s linear, opacity 2.5s ease; }
+                box-shadow: var(--mshade, inset -9px -7px 16px rgba(25,35,65,.5),
+                  inset 5px 4px 10px rgba(255,255,255,.35));
+                /* the phase is a mask (wxMoonMask): the night side is see-through,
+                 * so by day the sky itself is the dark limb */
+                -webkit-mask-size: 100% 100%; mask-size: 100% 100%;
+                -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; }
         @keyframes moonspin { to { background-position: 0 0, -116px 0; } }
-        .moon .shade { position: absolute; inset: -2px; border-radius: 50%;
-                background: rgba(9,13,28,.94); filter: blur(1.2px);
-                transform: translateX(var(--mshift, 0px)); transition: transform 2s ease; }
         .stars { display: none; }
         .star { position: absolute; width: 2px; height: 2px; border-radius: 50%;
                 background: #EAF0FF; animation: twinkle 4s ease-in-out infinite; }
@@ -1097,7 +1138,7 @@ class AnimatedSkyWeatherCard extends HTMLElement {
           <div class="layer stars"></div>
           <div class="sun"><div class="bloom"></div><div class="warm"></div><div class="spikes"><div class="spike"></div><div class="spike s2"></div><div class="spike s3"></div><div class="spike s4"></div></div><div class="streak"></div><div class="core"></div></div>
           <div class="layer ghosts"><div class="ghost g1"></div><div class="ghost g2"></div><div class="ghost g3"></div></div>
-          <div class="moon"><div class="shade"></div></div>
+          <div class="moon"><div class="mglow"></div><div class="mface"></div></div>
           <div class="layer clouds"></div>
           <div class="layer veil"><b class="veilw v1"></b><b class="veilw v2"></b></div>
           <div class="layer shafts"></div>
@@ -1140,8 +1181,9 @@ class AnimatedSkyWeatherCard extends HTMLElement {
     const hh = Number(this._config.height) || (compact ? 355 : 440);
     q(".sky").style.minHeight = hh + "px";
     q(".content").style.minHeight = hh + "px";
+    this._moonKey = this._starKey = "";
     this._els = {
-      sky: q(".sky"), sun: q(".sun"), moon: q(".moon"), stars: q(".stars"),
+      sky: q(".sky"), sun: q(".sun"), moon: q(".moon"), mface: q(".mface"), stars: q(".stars"),
       clouds: q(".clouds"), rain: q(".rain"), snow: q(".snow"), fog: q(".fog"),
       leaves: q(".leaves"), hslots: q(".hslots"), splashrow: q(".splashrow"),
       ghosts: [q(".ghost.g1"), q(".ghost.g2"), q(".ghost.g3")],
@@ -1463,11 +1505,13 @@ class AnimatedSkyWeatherCard extends HTMLElement {
     if (!this._els || !this._hass || !this._hass.config) return;
     const lat = this._hass.config.latitude, lng = this._hass.config.longitude;
     const el = this._els.moon;
-    if (lat == null || lng == null) { el.style.display = "none"; return; }
+    if (lat == null || lng == null) { el.style.display = "none"; this._occultStars(null); return; }
     const mp = wxAstro.moonPos(new Date(), lat, lng);
     const cover = this._lastCover || 0;
     const pos = wxSunPos(mp.elevation, mp.azimuth, this._south);
-    if (mp.elevation < -1 || cover >= 70 || !pos) { el.style.display = "none"; return; }
+    if (mp.elevation < -1 || cover >= 70 || !pos) {
+      el.style.display = "none"; this._occultStars(null); return;
+    }
     el.style.display = "block";
     el.style.left = pos.x + "%";
     el.style.top = pos.y + "%";
@@ -1480,10 +1524,64 @@ class AnimatedSkyWeatherCard extends HTMLElement {
     }
     let vis = wxMoonVis(ill.fraction, !!sunUp, sep);
     vis = +(vis * (1 - (this._veil || 0) * 0.45)).toFixed(2);
-    if (vis <= 0.02) { el.style.display = "none"; return; }
+    if (vis <= 0.02) { el.style.display = "none"; this._occultStars(null); return; }
     el.style.opacity = String(vis);
-    const shift = (ill.fraction * 62) * (ill.waxing ? -1 : 1);
-    el.style.setProperty("--mshift", shift.toFixed(0) + "px");
+    this._drawMoonPhase(ill, mp);
+    this._occultStars(pos);
+  }
+
+  /* Phase, tilt and light. Rebuilt only when a rounded input changes:
+   * _updateMoon runs on every hass update. */
+  _drawMoonPhase(ill, mp) {
+    const f = ill.fraction;
+    const sunEl = this._sun ? Number(this._sun.attributes.elevation) : -90;
+    const limb = ((ill.angle - mp.parallactic) % 360 + 360) % 360;
+    // earthshine on the night side once the sky is dark: plain to see beside
+    // a thin crescent (the earth is then nearly "full" as seen from the moon),
+    // gone by the quarter
+    const earth = wxClamp((-4 - sunEl) / 8, 0, 1) * 0.14 * Math.pow(1 - f, 2.5);
+    const glow = wxClamp((2 - sunEl) / 8, 0, 1) * Math.pow(f, 0.7);
+    const key = [f.toFixed(3), limb.toFixed(0), earth.toFixed(3), glow.toFixed(2)].join("|");
+    if (key === this._moonKey) return;
+    this._moonKey = key;
+    const mask = wxMoonMask(f, limb, earth);
+    this._els.mface.style.webkitMaskImage = mask;
+    this._els.mface.style.maskImage = mask;
+    // sunward unit vector on screen (y down), weighted by how side-lit the
+    // moon is: sin(phase angle) = 0 full, 1 at the quarters
+    const a = limb * Math.PI / 180, side = 2 * Math.sqrt(f * (1 - f));
+    const dx = -Math.sin(a) * side, dy = -Math.cos(a) * side;
+    const st = this._els.moon.style;
+    st.setProperty("--mhx", (50 + dx * 14).toFixed(1) + "%");
+    st.setProperty("--mhy", (50 + dy * 14).toFixed(1) + "%");
+    st.setProperty("--mshade", `inset ${(dx * 11.4).toFixed(1)}px ${(dy * 11.4).toFixed(1)}px 16px rgba(25,35,65,.5), ` +
+      `inset ${(-dx * 6.4).toFixed(1)}px ${(-dy * 6.4).toFixed(1)}px 10px rgba(255,255,255,${(0.35 * side).toFixed(2)})`);
+    // glow on the centroid of the lit part: 0.849 r (1 - f) toward the bright limb
+    const c = 0.849 * 29 * (1 - f) / (side || 1);
+    st.setProperty("--mgx", (dx * c).toFixed(1) + "px");
+    st.setProperty("--mgy", (dy * c).toFixed(1) + "px");
+    st.setProperty("--mgo", glow.toFixed(2));
+  }
+
+  /* The night side is see-through, so a star behind the disc would shine
+   * through it - hide the stars the moon covers, as the real one occults them. */
+  _occultStars(pos) {
+    const key = pos ? pos.x.toFixed(1) + "," + pos.y.toFixed(1) : "";
+    if (key === this._starKey) return;
+    // layout is read only when the moon has really moved (every ~20 s), never
+    // on each hass update - that would force a layout pass every time
+    const sky = this._els.sky, w = pos ? sky.clientWidth : 0, h = pos ? sky.clientHeight : 0;
+    if (pos && (!w || !h)) return;            // not laid out yet - next update
+    this._starKey = key;
+    for (const star of this._els.stars.children) {
+      let hide = false;
+      if (pos) {
+        const dx = (parseFloat(star.style.left) - pos.x) * w / 100;
+        const dy = (parseFloat(star.style.top) - pos.y) * h / 100;
+        hide = dx * dx + dy * dy < 31 * 31;
+      }
+      star.style.visibility = hide ? "hidden" : "";
+    }
   }
 
   _renderHourly() {
