@@ -119,6 +119,7 @@ time_format: "12"
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `entity` | string | **required** | Weather entity for temperature, hourly and daily forecasts |
+| `forecast_entity` | string | — | Optional second weather entity whose forecast **replaces** `entity`'s in the hourly strip and the daily rows — for example a national weather service entity whose forecast you trust more. Day/night (NWS-style) forecasts are merged into daily rows. Falls back to `entity` whenever it is unavailable or returns no forecast, and takes over again by itself when it recovers. |
 | `current_entity` | string | — | Optional second weather entity used **only** for the current condition. Point this at a national observation integration (NWS, Met Office, DWD, KNMI, Environment Canada) when your forecast provider's "current" condition lags reality. Falls back to `entity`. |
 | `coverage_entity` | string | — | Optional sensor reporting cloud cover in **percent**. Drives cloud density directly; without it the condition sets the density. A cloudy-type observation raises a low reading (so a lagging sensor can't leave a clear sky under an overcast label), and a clear observation — `sunny`, `clear`, `clear-night` — clears the sky outright, so a high model reading can't cloud over a night your observer calls clear. |
 | `city` | string | — | Name shown above the temperature. Omit to show none. |
@@ -148,6 +149,8 @@ sky it draws) from real observations while keeping your model's temperatures and
 
 ## Notes
 
+- **No empty panels.** If neither `forecast_entity` nor `entity` can supply a forecast, the card keeps
+  the last forecast it had, or says "Forecast unavailable" instead of drawing empty panels.
 - **°C and °F are both supported.** The card prints whatever your provider reports; the unit
   (from the entity, else your Home Assistant unit system) is used only to place temperatures on
   the colour scale, so a 30 °C day is coloured as the hot day it is.

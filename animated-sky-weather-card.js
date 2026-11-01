@@ -24,7 +24,8 @@
  * Config:
  *   entity           (required) weather entity for temperature and forecasts
  *   forecast_entity  optional entity whose forecast replaces entity's; NWS
- *                    day/night entities are merged into daily rows
+ *                    day/night entities are merged into daily rows. Falls
+ *                    back to entity while it is unavailable or empty
  *   current_entity   optional entity used ONLY for the observed condition
  *   coverage_entity  optional sensor reporting cloud cover in percent
  *   city             name shown above the temperature
@@ -43,7 +44,7 @@
  */
 "use strict";
 
-const VERSION = "1.5.0";
+const VERSION = "1.5.1";
 console.info("%c animated-sky-weather-card %c v" + VERSION + " ",
   "background:#1B2440;color:#F7C173;border-radius:3px 0 0 3px;padding:2px 0 2px 6px",
   "background:#F7C173;color:#1B2440;border-radius:0 3px 3px 0;padding:2px 6px 2px 0");
@@ -515,10 +516,16 @@ class AnimatedSkyWeatherCard extends HTMLElement {
   static getStubConfig() { return { entity: "weather.forecast_home" }; }
 
   set hass(hass) {
-    const first = !this._hass;
     this._hass = hass;
     if (!this._built) this._build();
-    if (first) this._fetchForecast();
+    // Fetch on the first hass and again whenever a forecast source comes or
+    // goes, so a dead forecast_entity hands over to entity (and takes back
+    // over when it recovers) without waiting for the 30-minute timer.
+    const fcKey = this._fcSources().map((e) => e + (this._usable(e) ? "+" : "-")).join(" ");
+    if (fcKey !== this._fcKey) {
+      this._fcKey = fcKey;
+      this._fetchForecast();
+    }
     this._render();
   }
 
@@ -671,31 +678,68 @@ class AnimatedSkyWeatherCard extends HTMLElement {
     }
   }
 
+  /* Forecast sources, in order: forecast_entity, then entity. */
+  _fcSources() {
+    const c = this._config || {};
+    return [c.forecast_entity, c.entity].filter((e, i, a) => e && a.indexOf(e) === i);
+  }
+
+  _usable(entity) {
+    const st = this._hass && this._hass.states[entity];
+    return !!st && !["unavailable", "unknown"].includes(st.state);
+  }
+
+  /* Daily rows from one entity. NWS-style entities only speak day/night
+   * periods, which are merged into daily rows. */
+  async _dailyFor(fe) {
+    try {
+      return await this._wsForecast(fe, "daily");
+    } catch (e) {
+      const periods = await this._wsForecast(fe, "twice_daily");
+      let daily = wxMergeTwiceDaily(periods);
+      // Today's daytime period has expired - rebuild the row so the panel
+      // (and the current-temp dot) still has a today to sit on.
+      const now = new Date();
+      if (!daily.some((d) => wxSameLocalDay(new Date(d.datetime), now))) {
+        const hi = await this._todayMax(this._config.entity);
+        const today = wxTodayFromNight(periods, hi, now);
+        if (today) daily = [today].concat(daily);
+      }
+      return daily;
+    }
+  }
+
+  /* Each source is tried in turn. One that is unavailable, errors or returns
+   * nothing hands over to the next, so a forecast_entity whose weather station
+   * stops reporting never blanks the panels while entity still forecasts.
+   * If no source answers, the previous forecast is kept (a blip); with nothing
+   * to keep, the panels say so instead of showing empty glass. */
   async _fetchForecast() {
     if (!this._hass) return;
-    const fe = this._config.forecast_entity || this._config.entity;
-    try {
-      let daily;
-      try {
-        daily = await this._wsForecast(fe, "daily");
-      } catch (e) {
-        // NWS-style entities only speak day/night periods
-        const periods = await this._wsForecast(fe, "twice_daily");
-        daily = wxMergeTwiceDaily(periods);
-        // Today's daytime period has expired - rebuild the row so the panel
-        // (and the current-temp dot) still has a today to sit on.
-        const now = new Date();
-        if (!daily.some((d) => wxSameLocalDay(new Date(d.datetime), now))) {
-          const hi = await this._todayMax(this._config.entity);
-          const today = wxTodayFromNight(periods, hi, now);
-          if (today) daily = [today].concat(daily);
-        }
+    const seq = (this._fcSeq = (this._fcSeq || 0) + 1);
+    let daily = null, hourly = null;
+    for (const fe of this._fcSources()) {
+      if (!this._usable(fe)) continue;
+      if (!daily) {
+        try {
+          const d = await this._dailyFor(fe);
+          if (d && d.length) daily = d;
+        } catch (e) { /* try the next source */ }
       }
-      this._forecast = daily;
-      this._renderForecast();
-      this._hourly = await this._wsForecast(fe, "hourly");
-      this._renderHourly();
-    } catch (e) { /* keep the previous forecast; the scene still works */ }
+      if (!hourly) {
+        try {
+          const h = await this._wsForecast(fe, "hourly");
+          if (h && h.length) hourly = h;
+        } catch (e) { /* try the next source */ }
+      }
+      if (daily && hourly) break;
+    }
+    if (seq !== this._fcSeq) return;   // a newer fetch started meanwhile; it wins
+    if (daily) this._forecast = daily;
+    if (hourly) this._hourly = hourly;
+    this._fcTried = true;
+    this._renderForecast();
+    this._renderHourly();
   }
 
   _build() {
@@ -1111,6 +1155,8 @@ class AnimatedSkyWeatherCard extends HTMLElement {
         .hourly svg { width: 24px; height: 24px; display: block; margin: 5px auto 3px; }
         .hourly .ht { font-size: 14px; font-weight: 600; }
         .hourly .ht.evt { font-size: 12px; letter-spacing: .2px; }
+        .nofc { grid-column: 1 / -1; text-align: center; font-size: 14px; font-weight: 600;
+                opacity: .9; padding: 4px 0; }
         .fc { display: grid; grid-template-columns: 48px 30px 42px 1fr 42px;
               gap: 9px 12px; align-items: center; align-content: space-evenly;
               background: rgba(10,16,32,.28); backdrop-filter: blur(10px);
@@ -1585,6 +1631,11 @@ class AnimatedSkyWeatherCard extends HTMLElement {
   }
 
   _renderHourly() {
+    this._renderHourlySlots();
+    this._renderEmptyState();
+  }
+
+  _renderHourlySlots() {
     if (!this._els || !this._hourly || !this._hourly.length) return;
     const now = Date.now();
     const upcoming = this._hourly.filter((h) => new Date(h.datetime).getTime() > now - 3600e3);
@@ -1662,6 +1713,50 @@ class AnimatedSkyWeatherCard extends HTMLElement {
   }
 
   _renderForecast() {
+    this._renderForecastRows();
+    this._renderEmptyState();
+  }
+
+  /* Empty states, once a fetch has finished: one message and never an empty
+   * glass panel. No daily rows and no hourly strip -> the hourly panel says so
+   * and the daily panel hides. Only one of them missing -> that panel hides,
+   * except that the daily panel says so when the hourly strip is all there is. */
+  _renderEmptyState() {
+    if (!this._els || !this._fcTried) return;
+    const compact = Number(this._config.forecast_rows) === 0;
+    const hasD = this._forecast.length > 0;
+    const hasH = !!(this._hourly && this._hourly.length);
+    const text = this._noFcText();
+    const show = (el, on) => {
+      const v = on ? "" : "none";
+      if (el.style.display !== v) el.style.display = v;
+    };
+    const say = (el) => {
+      const c = el.firstElementChild;
+      if (el.childElementCount === 1 && c.className === "nofc" && c.textContent === text) return;
+      const m = document.createElement("div");
+      m.className = "nofc";
+      m.textContent = text;
+      el.replaceChildren(m);
+    };
+    if (hasH) show(this._els.hourly, true);
+    else if (!hasD) { say(this._els.hslots); show(this._els.hourly, true); }
+    else show(this._els.hourly, false);
+    if (!compact) {
+      if (hasD) show(this._els.fc, true);
+      else if (hasH) { say(this._els.fc); show(this._els.fc, true); }
+      else show(this._els.fc, false);
+    }
+    if (!hasD && this._els.hilo && this._els.hilo.textContent) this._els.hilo.textContent = "";
+  }
+
+  _noFcText() {
+    if (/^en\b/i.test(wxLocale(this._hass, this._config))) return "Forecast unavailable";
+    return wxT(this._hass, ["ui.card.weather.forecast"], "Forecast") + ": " +
+      wxT(this._hass, ["state.default.unavailable"], "Unavailable");
+  }
+
+  _renderForecastRows() {
     if (!this._els || !this._forecast.length) return;
     const night = this._sun ? Number(this._sun.attributes.elevation) < -4 : false;
     // compact mode still owns the hero H:L line - only the panel is skipped
